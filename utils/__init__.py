@@ -71,7 +71,8 @@ def plot_categories_distribution(df: pd.DataFrame, category_col: str, title: str
 
 
 def compute_loan_probability(df: pd.DataFrame, category_col: str, 
-                             dummy_col: str = 'id', label_col: str = 'personal_loan'
+                             dummy_col: str = 'id', label_col: str = 'personal_loan',
+                             ascending: bool = True,
                              ) -> pd.DataFrame:
     """Compute loan probability given categorical value.
 
@@ -80,6 +81,8 @@ def compute_loan_probability(df: pd.DataFrame, category_col: str,
         category_col (str): name of category column.
         dummy_col (str, optional): dummy column to use for groupby. Defaults to 'id'.
         label_col (str, optional): name of label column. Defaults to 'personal_loan'.
+        ascending (bool, optional): flag to indicate whether to sort probabilities in ascending order.
+            Defaults to True.
 
     Returns:
         pd.DataFrame: dataframe containing the computed probabilities.
@@ -90,7 +93,7 @@ def compute_loan_probability(df: pd.DataFrame, category_col: str,
 
     df_probs = df[required_cols].groupby(group_cols).count() / df[[category_col, dummy_col]].groupby([category_col]).count()
     df_probs = df_probs.reset_index().rename(columns = {dummy_col: renamed_col})
-    df_probs = df_probs[df_probs[label_col] == 1].sort_values(by = renamed_col)
+    df_probs = df_probs[df_probs[label_col] == 1].sort_values(by = renamed_col, ascending = ascending)
 
     return df_probs
 
