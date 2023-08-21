@@ -1,12 +1,28 @@
 import joblib
+import numpy as np
 import pandas as pd
-import plotly.io as pio
 
+import lightgbm as lgb
+import plotly.io as pio
 import plotly.express as px
+
+from sklearn.metrics import f1_score
+from catboost import CatBoostClassifier
 from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import StratifiedKFold
 
 
 pio.renderers.default = 'plotly_mimetype+notebook'
+
+
+lgb_parameters = {
+    'application': 'binary',
+    'objective': 'binary',
+    'metric': ['binary_logloss'],
+    'is_unbalance': 'true',
+    'boosting': 'gbdt',
+    'seed': 0,
+}
 
 
 def standardize_column_names(df: pd.DataFrame, 
@@ -149,3 +165,132 @@ def encode_categorical_features(df: pd.DataFrame,
 
     joblib.dump(encoder_dict, encoder_path)
     return df, encoder_dict
+
+
+def train_lgb_model(train: pd.DataFrame, num_boost_rounds: int, features: list, 
+                    cat_features: list, val: pd.DataFrame = None, label_col: str = 'personal_loan',
+                    lgb_parameters: dict = lgb_parameters, model_path: str = None,
+                    callbacks: list = None) -> lgb.Booster:
+    """Train lightGBM model.
+
+    Args:
+        train (pd.DataFrame): dataframe containing train dataset.
+        num_boost_rounds (int): number of boosting rounds to train model.
+        features (list): full list of features used for model training.
+        cat_features (list): list of categorical features used for model training.
+        val (pd.DataFrame, optional): dataframe containing validation dataset. Defaults to None.
+        label_col (str, optional): name of label column. Defaults to 'personal_loan'.
+        lgb_parameters (dict, optional): training hyperparameters. Defaults to lgb_parameters.
+        model_path (str, optional): file path to save model to. Defaults to None.
+        callbacks (list, optional): list of callbacks to apply during model training. Defaults to None.
+
+    Returns:
+        lgb.Booster: fitted model.
+    """
+    train_data = lgb.Dataset(train[features], categorical_feature = cat_features, label = train[label_col], free_raw_data = False)
+    val_data = None
+
+    if val is not None:
+        val_data = lgb.Dataset(val[features], categorical_feature = cat_features, label = val[label_col], free_raw_data = False)
+
+    model = lgb.train(
+        lgb_parameters, train_data, valid_sets = val_data, num_boost_round = num_boost_rounds,
+        callbacks = callbacks
+    )
+    if model_path is not None:
+        model.save_model(model_path)
+
+    return model
+
+
+def nested_stratified_kfold_cv(train: pd.DataFrame, features: list, cat_features: list, 
+                               model_name: str, num_folds: int = 5, threshold: float = 0.5, 
+                               label_col: str = 'personal_loan', scaling_factor: float = 1,
+                               stopping_rounds: int = 5) -> dict:
+    """Perform nested stratified k-fold cross-validation.
+
+    Args:
+        train (pd.DataFrame): train dataframe.
+        features (list): full list of features used for model training.
+        cat_features (list): list of categorical features used for model training.
+        model_name (str): name of model to use. Takes on the value 'catboost' or lightgbm'.
+        num_folds (int, optional): number of folds for cross validation. Defaults to 5.
+        threshold (float, optional): probability threshold for predicting personal_loan = 1 class. Defaults to 0.5.
+        label_col (str, optional): name of label column. Defaults to 'personal_loan'.
+        scaling_factor (float, optional): multiplier to use for number of boosting rounds. Defaults to 1.
+        stopping_rounds (int, optional): number of early stopping rounds. Defaults to 5.
+
+    Returns:
+        dict: stratified kfold results.
+    """
+    skf = StratifiedKFold(n_splits = num_folds, shuffle = True, random_state = 0)
+
+    # Initialize metrics/hyperparameters containers
+    val_f1_list = []
+    test_f1_list = []
+    val_num_boost_rounds_list = []
+    test_num_boost_rounds_list = []
+
+    # Outer loop splits the dataset into train (N - 1 partitions) and test (1 partition) datasets
+    for train_idx_, test_idx in skf.split(train, train[label_col]):
+        train_outer = train.iloc[train_idx_]
+        test_outer = train.iloc[test_idx]
+
+        print(f'Outer train shape: {train_outer.shape}')
+        print(f'test shape: {test_outer.shape}')
+
+        inner_num_boost_rounds_list = []
+
+        # Inner loop splits the train dataset (N - 1 partitions) further into a smaller train (K - 1 partitions) and validation (1 partition) dataset for hyperparameter tuning
+        for train_idx, val_idx in skf.split(train_outer, train_outer[label_col]):
+            train_inner = train_outer.iloc[train_idx]
+            val_inner = train_outer.iloc[val_idx]
+
+            print(f'Inner train shape: {train_inner.shape}')
+            print(f'val shape: {val_inner.shape}')
+
+            if model_name == 'lightgbm':
+                model = train_lgb_model(
+                    train = train_inner, num_boost_rounds = 100, 
+                    features = features, cat_features = cat_features,
+                    val = val_inner, callbacks = [lgb.early_stopping(stopping_rounds = stopping_rounds)]
+                )
+                best_iter = model.best_iteration
+
+            else:
+                model = None
+                best_iter = model.best_iteration_
+
+            print(f'Best iteration: {best_iter}')
+            val_preds = model.predict(val_inner[features]) > threshold
+            val_f1 = f1_score(val_inner[label_col], val_preds)
+            print(f'Validation f1 score: {val_f1}')
+            
+            val_f1_list.append(val_f1)
+            inner_num_boost_rounds_list.append(best_iter)
+            val_num_boost_rounds_list.append(best_iter)
+
+        # Train on full N - 1 partitions dataset and test on 1 partition held-out test set
+        # Extrapolate the num_boost_rounds based on the ratio K / (K - 1)
+        avg_val_num_boost_rounds = np.mean(inner_num_boost_rounds_list)
+        print(f'Average best iteration: {avg_val_num_boost_rounds}')
+
+        scaled_num_boost_rounds = int(avg_val_num_boost_rounds * scaling_factor)
+        print(f'Scaled average best iteration: {scaled_num_boost_rounds}')
+
+        model = train_lgb_model(
+            train = train_outer, num_boost_rounds = scaled_num_boost_rounds,
+            features = features, cat_features = cat_features
+        )
+        test_preds = model.predict(test_outer[features]) > threshold
+        test_f1 = f1_score(test_outer[label_col], test_preds)
+        print(f'Test f1 score: {test_f1}')
+        test_f1_list.append(test_f1)
+        test_num_boost_rounds_list.append(scaled_num_boost_rounds)
+
+    return {
+        'val_f1': val_f1_list,
+        'test_f1': test_f1_list,
+        'val_num_boost_rounds': val_num_boost_rounds_list,
+        'test_num_boost_rounds': test_num_boost_rounds_list
+    }
