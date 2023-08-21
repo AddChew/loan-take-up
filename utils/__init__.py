@@ -203,6 +203,41 @@ def train_lgb_model(train: pd.DataFrame, num_boost_rounds: int, features: list,
     return model
 
 
+def train_catboost_model(train: pd.DataFrame, num_boost_rounds: int, features: list, 
+                    cat_features: list, val: pd.DataFrame = None, label_col: str = 'personal_loan',
+                    stopping_rounds: int = None, model_path: str = None) -> CatBoostClassifier:
+    """Train catboost model.
+
+    Args:
+        train (pd.DataFrame): dataframe containing train dataset.
+        num_boost_rounds (int): number of boosting rounds to train model.
+        features (list): full list of features used for model training.
+        cat_features (list): list of categorical features used for model training.
+        val (pd.DataFrame, optional): dataframe containing validation dataset. Defaults to None.
+        label_col (str, optional): name of label column. Defaults to 'personal_loan'.
+        stopping_rounds (int, optional): number of early stopping rounds. Defaults to None.
+        model_path (str, optional): file path to save model to. Defaults to None.
+
+    Returns:
+        CatBoostClassifier: fitted catboost model.
+    """
+    val_data = None
+    model = CatBoostClassifier(random_state = 0, num_boost_round = num_boost_rounds)
+
+    if val is not None:
+        val_data = (val[features], val[label_col])
+
+    model.fit(
+        X = train[features], y = train[label_col],
+        eval_set = val_data, cat_features = cat_features,
+        early_stopping_rounds = stopping_rounds,
+    )
+    if model_path is not None:
+        model.save_model(model_path)
+
+    return model
+
+
 def nested_stratified_kfold_cv(train: pd.DataFrame, features: list, cat_features: list, 
                                model_name: str, num_folds: int = 5, threshold: float = 0.5, 
                                label_col: str = 'personal_loan', scaling_factor: float = 1,
@@ -258,7 +293,11 @@ def nested_stratified_kfold_cv(train: pd.DataFrame, features: list, cat_features
                 best_iter = model.best_iteration
 
             else:
-                model = None
+                model = train_catboost_model(
+                    train = train_inner, num_boost_rounds = 100,
+                    features = features, cat_features = cat_features,
+                    val = val_inner, stopping_rounds = stopping_rounds
+                )
                 best_iter = model.best_iteration_
 
             print(f'Best iteration: {best_iter}')
@@ -278,10 +317,17 @@ def nested_stratified_kfold_cv(train: pd.DataFrame, features: list, cat_features
         scaled_num_boost_rounds = int(avg_val_num_boost_rounds * scaling_factor)
         print(f'Scaled average best iteration: {scaled_num_boost_rounds}')
 
-        model = train_lgb_model(
-            train = train_outer, num_boost_rounds = scaled_num_boost_rounds,
-            features = features, cat_features = cat_features
-        )
+        if model_name == 'lightgbm':
+            model = train_lgb_model(
+                train = train_outer, num_boost_rounds = scaled_num_boost_rounds,
+                features = features, cat_features = cat_features
+            )
+        else:
+            model = train_catboost_model(
+                train = train_outer, num_boost_rounds = scaled_num_boost_rounds,
+                features = features, cat_features = cat_features
+            )
+
         test_preds = model.predict(test_outer[features]) > threshold
         test_f1 = f1_score(test_outer[label_col], test_preds)
         print(f'Test f1 score: {test_f1}')
