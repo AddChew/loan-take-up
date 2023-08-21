@@ -9,6 +9,8 @@ import plotly.express as px
 from sklearn.metrics import f1_score
 from catboost import CatBoostClassifier
 from sklearn.preprocessing import LabelEncoder
+
+from sklearn.metrics import classification_report
 from sklearn.model_selection import StratifiedKFold
 
 
