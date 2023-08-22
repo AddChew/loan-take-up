@@ -119,7 +119,7 @@ def compute_loan_probability(df: pd.DataFrame, category_col: str,
 def plot_category_loan_distribution(df: pd.DataFrame, category_col: str, dummy_col: str = 'id', 
                                     label_col: str = 'personal_loan', height: int = 800, 
                                     width: int = 600, title: str = None):
-    """Plot probability of loan conversion given categorical value.
+    """Plot probability of loan take up given categorical value.
 
     Args:
         df (pd.DataFrame): dataframe containing category column.

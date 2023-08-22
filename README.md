@@ -1,4 +1,4 @@
-# Loan Conversion
+# Loan Take Up
 
 This repository contains scripts and notebooks to:
 - Build machine learning models to predict if a customer would take up a personal loan if the targeted marketing campaign is carried out
@@ -11,7 +11,7 @@ Run setup.sh to setup your conda python environment and install the necessary li
 ```
 chmod +x ./setup.sh
 ./setup.sh
-conda activate loan-conversion
+conda activate loan-take-up
 ```
 
 ## Viewing Instructions
